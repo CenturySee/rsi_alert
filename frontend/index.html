@@ -159,7 +159,8 @@
     <div class="brand"><b>RSI 预警</b><span>terminal</span></div>
     <div class="field">
       <label>代码</label>
-      <input id="code" type="text" inputmode="numeric" placeholder="000001" autocomplete="off" />
+      <input id="code" type="text" inputmode="numeric" placeholder="000001" autocomplete="off" list="codeHistory" />
+      <datalist id="codeHistory"></datalist>
     </div>
     <span class="badge" id="marketBadge">自动</span>
     <div class="field">
@@ -257,6 +258,20 @@ const $ = (id) => document.getElementById(id);
 $('period').value = period;
 $('periodLabel').textContent = '(' + period + ')';
 
+// ---- 历史品种（localStorage，最多 20 条，最近的在前）----
+const HISTORY_MAX = 20;
+function getHistory() { return store.get('history', []); }
+function renderCodeHistory() {
+  $('codeHistory').innerHTML = getHistory()
+    .map(c => `<option value="${c}">${inferMarket(c)}.${c}</option>`).join('');
+}
+function pushHistory(code) {
+  let h = getHistory().filter(c => c !== code);
+  h.unshift(code);
+  store.set('history', h.slice(0, HISTORY_MAX));
+  renderCodeHistory();
+}
+
 // ---- charts ----
 // 单实例 + 多 grid：K 线主图 / 成交量副图 / RSI 副图共用同一根 x 轴，
 // 一个 dataZoom 同时控制三段，缩放天然同步、永不错位；axisPointer.link 让十字光标贯穿全图。
@@ -299,6 +314,7 @@ async function load(force) {
     lastPayload = data;
     render(data);
     hideOverlay();
+    pushHistory(code);
   } catch (e) {
     showError(e.message);
   }
@@ -526,6 +542,7 @@ $('dlgSave').addEventListener('click', () => {
 });
 
 // init
+renderCodeHistory();
 const savedCode = store.get('code', '');
 if (savedCode) { $('code').value = savedCode; $('marketBadge').textContent = inferMarket(savedCode); load(false); }
 else { $('overlay').classList.add('show'); $('spin').style.display = 'none'; $('overlayMsg').innerHTML = '输入品种代码开始 — 例如 <b style="color:var(--gold)">000001</b>，回车查询'; }
