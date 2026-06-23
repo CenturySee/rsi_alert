@@ -94,8 +94,7 @@
   /* ---- main grid ---- */
   .main { display: grid; grid-template-columns: 1fr 340px; gap: 0; flex: 1; min-height: 0; }
   .charts { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
-  #kchart { height: 56vh; min-height: 340px; }
-  #rsichart { height: 26vh; min-height: 170px; border-top: 1px solid var(--line-soft); }
+  #chart { height: 82vh; min-height: 520px; }
 
   /* ---- ladder (signature) ---- */
   .ladder { padding: 14px 16px; overflow-y: auto; }
@@ -201,8 +200,7 @@
   <!-- main -->
   <div class="main">
     <div class="charts">
-      <div id="kchart"></div>
-      <div id="rsichart"></div>
+      <div id="chart"></div>
     </div>
     <aside class="ladder">
       <h2>↑ 上穿预警 <span class="day" id="upDay"></span></h2>
@@ -260,10 +258,10 @@ $('period').value = period;
 $('periodLabel').textContent = '(' + period + ')';
 
 // ---- charts ----
-const kchart = echarts.init($('kchart'), null, { renderer: 'canvas' });
-const rsichart = echarts.init($('rsichart'), null, { renderer: 'canvas' });
-echarts.connect([kchart, rsichart]);
-window.addEventListener('resize', () => { kchart.resize(); rsichart.resize(); });
+// 单实例 + 多 grid：K 线主图 / 成交量副图 / RSI 副图共用同一根 x 轴，
+// 一个 dataZoom 同时控制三段，缩放天然同步、永不错位；axisPointer.link 让十字光标贯穿全图。
+const chart = echarts.init($('chart'), null, { renderer: 'canvas' });
+window.addEventListener('resize', () => chart.resize());
 
 let lastPayload = null;
 
@@ -308,13 +306,14 @@ async function load(force) {
 
 // ---- render ----
 function fmtPct(p) { return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; }
+function fmtP(p) { return p.toFixed(3); }   // 价格默认 3 位小数
 
 function render(d) {
   $('marketBadge').textContent = d.market;
   $('periodLabel').textContent = '(' + d.period + ')';
   $('symbolSub').textContent = d.market + '.' + d.code;
-  $('lastClose').textContent = d.last_close.toFixed(2);
-  $('pivotPrice').textContent = d.last_close.toFixed(2);
+  $('lastClose').textContent = fmtP(d.last_close);
+  $('pivotPrice').textContent = fmtP(d.last_close);
   $('nextDay').textContent = d.next_trading_day || '—';
   $('limitSub').textContent = '涨跌停 ±' + (d.limit_pct * 100).toFixed(0) + '%';
   $('upDay').textContent = d.next_trading_day || '';
@@ -335,15 +334,14 @@ function render(d) {
     const arrow = best.direction === 'down' ? '↓' : '↑';
     $('nearest').textContent = fmtPct(best.pct_change);
     $('nearest').className = 'v num ' + (best.pct_change >= 0 ? 'up' : 'down');
-    $('nearestSub').textContent = arrow + ' RSI ' + (best.direction === 'down' ? '<' : '>') + ' ' + best.threshold + ' @ ' + best.price.toFixed(2);
+    $('nearestSub').textContent = arrow + ' RSI ' + (best.direction === 'down' ? '<' : '>') + ' ' + best.threshold + ' @ ' + fmtP(best.price);
   } else {
     $('nearest').textContent = '—'; $('nearestSub').textContent = '近端阈值均已触及或超涨跌停';
   }
 
   renderLadder('upRungs', d.alerts.up, 'up');
   renderLadder('downRungs', d.alerts.down, 'down');
-  renderKline(d);
-  renderRsi(d);
+  renderChart(d);
 }
 
 function rungHtml(a, dir) {
@@ -355,7 +353,7 @@ function rungHtml(a, dir) {
   const cls = a.pct_change >= 0 ? 'up' : 'down';
   return `<div class="rung" data-price="${a.price}">
     <span class="lvl">${sign}${a.threshold}</span>
-    <span class="price num ${cls}">¥${a.price.toFixed(2)}</span>
+    <span class="price num ${cls}">¥${fmtP(a.price)}</span>
     <span class="pct num ${cls}">${fmtPct(a.pct_change)}</span>
   </div>`;
 }
@@ -384,32 +382,98 @@ function triggerMarkLines(d, highlight) {
   return mk(d.alerts.up, C.up).concat(mk(d.alerts.down, C.down));
 }
 
-function renderKline(d, highlight = null) {
+function fmtVol(v) {
+  if (v == null || isNaN(v)) return '—';
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿';
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + '万';
+  return '' + v;
+}
+
+// 共享 tooltip：一次性显示该日 OHLC + 成交量 + RSI
+function tooltipFormatter(ps) {
+  if (!ps || !ps.length) return '';
+  let s = '<span style="color:' + C.muted + '">' + ps[0].axisValueLabel + '</span><br>';
+  ps.forEach(p => {
+    if (p.seriesType === 'candlestick') {
+      const a = p.data, off = a.length >= 5 ? 1 : 0;   // candlestick 原始数据 [open,close,low,high]
+      const o = a[off], c = a[off + 1], l = a[off + 2], h = a[off + 3];
+      const cls = c >= o ? C.up : C.down;
+      s += '开 ' + fmtP(o) + '　收 <span style="color:' + cls + '">' + fmtP(c) + '</span><br>';
+      s += '高 ' + fmtP(h) + '　低 ' + fmtP(l) + '<br>';
+    } else if (p.seriesName === '成交量') {
+      const vol = (p.data && p.data.value != null) ? p.data.value : p.data;
+      s += '量 ' + fmtVol(vol) + '<br>';
+    } else if (p.seriesName && p.seriesName.indexOf('RSI') === 0) {
+      const r = +p.data;
+      if (!isNaN(r)) s += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + p.color + ';margin-right:6px"></span>'
+        + '<span style="color:' + p.color + '">' + p.seriesName + '</span> ' + r.toFixed(2) + '<br>';
+    }
+  });
+  return s;
+}
+
+function renderChart(d, highlight = null) {
   const dates = d.kline.map(b => b.date);
   const candles = d.kline.map(b => [b.open, b.close, b.low, b.high]);
-  const vols = d.kline.map((b, i) => ({ value: b.volume, itemStyle: { color: b.close >= b.open ? 'rgba(240,70,75,.55)' : 'rgba(31,185,122,.55)' } }));
+  const vols = d.kline.map(b => ({ value: b.volume, itemStyle: { color: b.close >= b.open ? 'rgba(240,70,75,.55)' : 'rgba(31,185,122,.55)' } }));
   const start = Math.max(0, ((dates.length - 80) / dates.length) * 100);
+  const rsiLines = downThresholds.concat(upThresholds).map(t => ({
+    yAxis: t, lineStyle: { color: C.faint, type: 'dotted', width: 1, opacity: .6 },
+    label: { show: true, position: 'insideStartTop', formatter: '' + t, color: C.faint, fontFamily: 'IBM Plex Mono', fontSize: 10 }
+  }));
+  // RSI 多周期线：标准 6/12/24 + 当前预警周期 period（非标准时额外高亮一条）
+  const rsiColors = { 6: C.gold, 12: '#4FA3FF', 24: '#C77DFF' };
+  const curP = d.rsi_period;
+  const rsiPeriods = Object.keys(d.rsi_multi || {}).map(Number).sort((a, b) => a - b);
+  const rsiDefs = rsiPeriods.map(p => ({
+    p,
+    color: rsiColors[p] || C.text,     // 非标准周期用白色区分
+    width: p === curP ? 1.9 : 1.2      // 当前预警周期加粗高亮
+  }));
+  const rsiSeries = rsiDefs.map((def, idx) => ({
+    type: 'line', name: 'RSI' + def.p, xAxisIndex: 2, yAxisIndex: 2,
+    data: d.rsi_multi[def.p] || [],
+    showSymbol: false, smooth: false, connectNulls: false,
+    color: def.color,                  // 统一 legend 色块 / tooltip 圆点 / 线条颜色
+    itemStyle: { color: def.color },
+    lineStyle: { color: def.color, width: def.width },
+    ...(idx === 0 ? { markLine: { symbol: 'none', silent: true, data: rsiLines } } : {})
+  }));
 
-  kchart.setOption({
+  chart.setOption({
     backgroundColor: 'transparent',
     animation: false,
+    legend: {
+      data: rsiDefs.map(def => 'RSI' + def.p), top: '73.2%', right: 22,
+      itemWidth: 16, itemHeight: 2, itemGap: 14,
+      textStyle: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 },
+      inactiveColor: C.faint
+    },
+    axisPointer: { link: [{ xAxisIndex: 'all' }], label: { backgroundColor: '#12161C', borderColor: C.line, color: C.text, fontFamily: 'IBM Plex Mono' } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: C.faint }, crossStyle: { color: C.faint } },
+      backgroundColor: '#12161C', borderColor: C.line,
+      textStyle: { color: C.text, fontFamily: 'IBM Plex Mono', fontSize: 12 },
+      formatter: tooltipFormatter
+    },
     grid: [
-      { left: 58, right: 18, top: 16, height: '64%' },
-      { left: 58, right: 18, top: '74%', height: '16%' }
+      { left: 58, right: 18, top: 16, height: '50%' },
+      { left: 58, right: 18, top: '60%', height: '12%' },
+      { left: 58, right: 18, top: '76%', height: '15%' }
     ],
-    axisPointer: { link: [{ xAxisIndex: 'all' }], lineStyle: { color: C.faint } },
-    tooltip: { trigger: 'axis', backgroundColor: '#12161C', borderColor: C.line, textStyle: { color: C.text, fontFamily: 'IBM Plex Mono', fontSize: 12 } },
     xAxis: [
-      { type: 'category', data: dates, scale: true, boundaryGap: true, axisLine: { lineStyle: { color: C.line } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, splitLine: { show: false } },
-      { type: 'category', gridIndex: 1, data: dates, axisLine: { lineStyle: { color: C.line } }, axisLabel: { show: false }, axisTick: { show: false } }
+      { type: 'category', data: dates, boundaryGap: true, axisLine: { lineStyle: { color: C.line } }, axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+      { type: 'category', gridIndex: 1, data: dates, boundaryGap: true, axisLine: { lineStyle: { color: C.line } }, axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+      { type: 'category', gridIndex: 2, data: dates, boundaryGap: true, axisLine: { lineStyle: { color: C.line } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, axisTick: { show: false }, splitLine: { show: false } }
     ],
     yAxis: [
       { scale: true, position: 'left', splitLine: { lineStyle: { color: 'rgba(35,42,51,.5)' } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, axisLine: { show: false } },
-      { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false }, axisLine: { show: false } }
+      { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false }, axisLine: { show: false } },
+      { gridIndex: 2, min: 0, max: 100, interval: 25, splitLine: { lineStyle: { color: 'rgba(35,42,51,.5)' } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, axisLine: { show: false } }
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1], start, end: 100 },
-      { type: 'slider', xAxisIndex: [0, 1], bottom: 4, height: 14, start, end: 100, borderColor: C.line, fillerColor: 'rgba(232,179,57,.12)', handleStyle: { color: C.gold }, textStyle: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, dataBackground: { lineStyle: { color: C.line }, areaStyle: { color: 'rgba(138,147,160,.1)' } } }
+      { type: 'inside', xAxisIndex: [0, 1, 2], start, end: 100 },
+      { type: 'slider', xAxisIndex: [0, 1, 2], bottom: 6, height: 14, start, end: 100, borderColor: C.line, fillerColor: 'rgba(232,179,57,.12)', handleStyle: { color: C.gold }, textStyle: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 }, dataBackground: { lineStyle: { color: C.line }, areaStyle: { color: 'rgba(138,147,160,.1)' } } }
     ],
     series: [
       {
@@ -417,38 +481,16 @@ function renderKline(d, highlight = null) {
         itemStyle: { color: C.up, color0: C.down, borderColor: C.up, borderColor0: C.down },
         markLine: { symbol: 'none', silent: true, data: triggerMarkLines(d, highlight) }
       },
-      { type: 'bar', name: '成交量', xAxisIndex: 1, yAxisIndex: 1, data: vols }
+      { type: 'bar', name: '成交量', xAxisIndex: 1, yAxisIndex: 1, data: vols },
+      ...rsiSeries
     ]
   }, { notMerge: true });
 }
 
+// 悬停阶梯只更新主图触发价 markLine（合并写入，保留当前缩放区间，不整图重绘）
 function highlightTrigger(price) {
-  if (lastPayload) renderKline(lastPayload, price);
-}
-
-// ---- rsi ----
-function renderRsi(d) {
-  const dates = d.kline.map(b => b.date);
-  const start = Math.max(0, ((dates.length - 80) / dates.length) * 100);
-  const lines = downThresholds.concat(upThresholds).map(t => ({
-    yAxis: t, lineStyle: { color: C.faint, type: 'dotted', width: 1, opacity: .6 },
-    label: { show: true, position: 'insideStartTop', formatter: '' + t, color: C.faint, fontFamily: 'IBM Plex Mono', fontSize: 10 }
-  }));
-  rsichart.setOption({
-    backgroundColor: 'transparent', animation: false,
-    grid: { left: 58, right: 18, top: 14, bottom: 22 },
-    tooltip: { trigger: 'axis', backgroundColor: '#12161C', borderColor: C.line, textStyle: { color: C.text, fontFamily: 'IBM Plex Mono', fontSize: 12 } },
-    axisPointer: { link: [{ xAxisIndex: 'all' }] },
-    xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: C.line } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 } },
-    yAxis: { min: 0, max: 100, interval: 25, splitLine: { lineStyle: { color: 'rgba(35,42,51,.5)' } }, axisLabel: { color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: 10 } },
-    dataZoom: [{ type: 'inside', start, end: 100 }],
-    series: [{
-      type: 'line', name: 'RSI', data: d.rsi, showSymbol: false, smooth: false,
-      lineStyle: { color: C.gold, width: 1.5 },
-      areaStyle: { color: 'rgba(232,179,57,.06)' },
-      markLine: { symbol: 'none', silent: true, data: lines }
-    }]
-  }, { notMerge: true });
+  if (!lastPayload) return;
+  chart.setOption({ series: [{ markLine: { symbol: 'none', silent: true, data: triggerMarkLines(lastPayload, price) } }] });
 }
 
 // ---- events ----

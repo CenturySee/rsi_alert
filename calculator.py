@@ -127,6 +127,21 @@ def limit_pct(code: str, *, is_st: bool = False) -> float:
     return 0.10  # 沪深主板
 
 
+def tick_size(code: str) -> float:
+    """最小变动价位（元）。
+
+    A 股不同品种的报价档位不同：股票为 0.01，ETF/LOF 基金、REITs、
+    可转债为 0.001。用错档位会反推出市场上不存在的触发价，故按代码前缀判定。
+    """
+    # 基金：沪 50/51/52/56/58（含科创ETF、REITs 508）、深 15/16/18（含 REITs 180）
+    if code.startswith(("50", "51", "52", "56", "58", "15", "16", "18")):
+        return 0.001
+    # 可转债：沪 11、深 12
+    if code.startswith(("11", "12")):
+        return 0.001
+    return 0.01  # 股票
+
+
 # ---------------------------------------------------------------------------
 # 预警价格反推（解析解）
 # ---------------------------------------------------------------------------
@@ -203,9 +218,10 @@ def build_alerts(
     period: int = 6,
     *,
     limit: float = 0.10,
+    tick: float = 0.01,
 ) -> dict[str, list[Alert]]:
     """批量计算下穿 / 上穿预警。"""
     return {
-        "down": [trigger_alert(closes, t, "down", period, limit=limit) for t in down_thresholds],
-        "up": [trigger_alert(closes, t, "up", period, limit=limit) for t in up_thresholds],
+        "down": [trigger_alert(closes, t, "down", period, limit=limit, tick=tick) for t in down_thresholds],
+        "up": [trigger_alert(closes, t, "up", period, limit=limit, tick=tick) for t in up_thresholds],
     }

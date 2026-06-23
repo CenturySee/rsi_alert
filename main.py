@@ -41,7 +41,8 @@ def _build_payload(code: str, market: str | None, period: int, days: int,
         raise HTTPException(status_code=422, detail=f"{market}.{code} 数据不足，无法计算 RSI({period})")
 
     limit = calc.limit_pct(code)
-    alerts = calc.build_alerts(closes, down, up, period, limit=limit)
+    tick = calc.tick_size(code)
+    alerts = calc.build_alerts(closes, down, up, period, limit=limit, tick=tick)
     try:
         next_day = fetcher.next_trading_day()
     except Exception:
@@ -57,6 +58,11 @@ def _build_payload(code: str, market: str | None, period: int, days: int,
         "next_trading_day": next_day,
         "kline": bars,
         "rsi": calc.rsi_series(closes, period),
+        # 副图：标准 6/12/24 + 当前预警周期 period（去重）
+        "rsi_period": period,
+        "rsi_multi": {
+            str(p): calc.rsi_series(closes, p) for p in sorted({6, 12, 24, period})
+        },
         "alerts": {
             "down": [asdict(a) for a in alerts["down"]],
             "up": [asdict(a) for a in alerts["up"]],
