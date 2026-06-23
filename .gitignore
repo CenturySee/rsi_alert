@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# uv / venv
+.venv/
+
+# 运行时缓存（每品种行情 JSON、交易日历），自动生成
+data/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,25 @@
+[project]
+name = "rsi-alert"
+version = "0.1.0"
+description = "本地 Web 页面：日线 K 线 + RSI，并反推下一交易日 RSI 触及各阈值的价格"
+readme = "需求与设计.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "akshare",
+    "opentdx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# 本项目是脚本式应用（main.py / fetcher.py / calculator.py 直接位于根目录），
+# 非可安装包，关闭构建。
+[tool.uv]
+package = false

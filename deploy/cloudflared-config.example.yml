@@ -1,0 +1,13 @@
+# 拷成 ~/.cloudflared/config.yml 后填写。
+# <TUNNEL_ID> 用 `cloudflared tunnel create rsi-alert` 输出的 ID；
+# 凭证文件名同 ID，登录后生成在 ~/.cloudflared/ 下。
+# hostname 换成你 `cloudflared tunnel route dns` 时用的子域名。
+
+tunnel: <TUNNEL_ID>
+credentials-file: /home/ubuntu/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: rsi.example.com
+    service: http://127.0.0.1:8000
+  # 兜底：未匹配的请求返回 404
+  - service: http_status:404
